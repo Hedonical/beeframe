@@ -2,10 +2,90 @@ import polars as pl
 from datetime import datetime
 import pytz
 import names
-from typing import Optional
+from typing import Optional, Literal
+from azure.storage.blob import BlobServiceClient
+from io import BytesIO
+from pathlib import Path
+
+"""
+Define any global constants:
+"""
 
 # get the timezone of nyc
 nyc = pytz.timezone("America/New_York")
+
+# to start all data will go through the cemetery container
+container = "cemetery"
+
+"""
+Define any global methods:
+"""
+
+def load_local_credential(path:str) -> str:
+    """
+    Given a link to a txt file, load the credentials stored there.
+
+    Intended for development as deployment will require the user to provide
+    the connection string
+    """
+
+    return Path(path).read_text()
+
+def establish_connection(connection_str:str) -> BlobServiceClient:
+    """
+    Given an Azure connection string, establish a connection to Azure and return the 
+    blob service client
+
+    Inputs:
+        connection_str [str]: string to a valid azure blob storage instance
+
+    Returns:
+        a blob service client instance that can be used to load files
+    """
+
+    return BlobServiceClient.from_connection_string(connection_str)
+
+def load_blob(service_client: BlobServiceClient, container:str, path:str) -> pl.DataFrame:
+    """
+    Given an Azure blob service client, a container, and a path to a parquet file,
+    load the corresponding polars dataframe.
+    """
+
+    # define the location to the blob
+    blob_location = service_client.get_blob_client(
+        container=container,
+        blob=path
+    )
+
+    return pl.read_parquet(blob_location.download_blob().readall())
+
+def write_blob(service_client: BlobServiceClient, container:str, path:str, dataframe: pl.DataFrame) -> None:
+    """
+    Given an Azure blob service client, a container, and a path to a parquet file,
+    write a corresponding polars dataframe.
+    """
+
+    # define the location to the blob
+    blob_location = service_client.get_blob_client(
+        container=container,
+        blob=path
+    )
+
+    # create a location in memory to write our parquet to 
+    buffer = BytesIO()
+
+    # write the dataframe to the buffer
+    dataframe.write_parquet(buffer)
+
+    # Seek the bytes, starting from the start of the buffer
+    buffer.seek(0)
+
+    parquet_bytes = buffer.getvalue()
+
+    # upload the parquet bytes to the blob
+    blob_location.upload_blob(parquet_bytes, overwrite = True)
+
+
 
 class hive:
     """
@@ -90,6 +170,15 @@ class hive:
                 "nature": nature,
                 "note": note,
                 "timestamp": datetime.now(nyc)
+            },
+            schema=
+            {
+                "ID": pl.String,
+                "level":  pl.String,
+                "nature": pl.String,
+                "note":  pl.String,
+                "timestamp": pl.Datetime
+
             }
         )
     
@@ -216,6 +305,15 @@ class box:
                 "nature": nature,
                 "note": note,
                 "timestamp": datetime.now(nyc)
+            },
+            schema=
+            {
+                "ID": pl.String,
+                "level":  pl.String,
+                "nature": pl.String,
+                "note":  pl.String,
+                "timestamp": pl.Datetime
+
             }
         )
     
@@ -251,36 +349,237 @@ class box:
         self.position = position
 
 
+class frame:
+    """
+    Pythonic representation of a frame
+
+    Attributes:
+        box [box]: the box that the frame is within
+        ID [str]: unique identifier of the frame
+        position [int]: position of the box left to right from the perspective of person standing behind the hive, starts at 1
+        measurements [DataFrame]: measurement dataframe relevant to this frame
+        notes [DataFrame]: note dataframe relevant to this box
+
+    
+    """
+
+    """
+    Attributes:
+    """
+    def __init__(self,  ID: str, box: Optional[box] = None,
+                  position: Optional[int] = None, measurements:Optional[pl.DataFrame] = None,
+                    notes:Optional[pl.DataFrame] = None):
+
+        self.box = box
+        self.ID = ID
+        self.position = position
+        self.measurements = measurements
+        self.notes = notes
+    
+    """
+    Methods:
+    """
+    def save(self) -> pl.DataFrame:
+        """
+        Returns the frame as a polars dataframe
+        """
+
+        return pl.DataFrame(
+            {
+                "box ID": self.box.ID,
+                "frame ID": self.ID,
+                "position": self.position,
+                "timestamp": datetime.now()
+
+            },
+            schema=
+            {
+                "box ID": pl.String,
+                "frame ID": pl.String,
+                "position": pl.Int64,
+                "timestamp": pl.Datetime,
+
+            }
+        )
+    
+    def load(self, frame_dataframe: pl.DataFrame, boxes: dict) -> None:
+        """
+        Given the overall frame dataframe and the dictionary of boxes, extract the latest parameters that match 
+        the frame ID
+        """
+
+        # select the latest box entry
+        latest = frame_dataframe.filter(pl.col("frame ID").eq(self.ID)
+                                       ).filter(
+                                           pl.col("timestamp").eq(pl.col("timestamp").max())
+                                       ).row(0, named=True)
+        
+        self.box = boxes[latest["box ID"]]
+        self.position = latest["position"]
+
+    def create_note(self, nature: str, note: str) -> pl.DataFrame:
+        """
+        Given a nature and note, return a dataframe that also includes the ID and level
+        """
+
+        return pl.DataFrame(
+            {
+                "ID": self.ID,
+                "level": "frame",
+                "nature": nature,
+                "note": note,
+                "timestamp": datetime.now(nyc)
+            },
+            schema=
+            {
+                "ID": pl.String,
+                "level":  pl.String,
+                "nature": pl.String,
+                "note":  pl.String,
+                "timestamp": pl.Datetime
+
+            }
+        )
+    
+    def load_notes(self, notes: pl.DataFrame) -> None:
+        """
+        Given the overall notes dataframe, select the notes relevant to this frame.
+        """
+
+        self.notes = notes.filter(pl.col("ID").eq(self.ID))
+
+    def create_measurement(self, side:Literal["left", "right"], bees:int,
+                           empty_cells:int, drone_cells:int,
+                           capped_brood_cells:int, uncapped_brood_cells:int, 
+                           capped_honey_cells:int, uncapped_honey_cells:int,
+                           pollen_cells:int, queen_cells:int) -> pl.DataFrame:
+        """
+        Given the relative, 0-10 measurements from the user, where 0 is
+        none at all and 10 is covering the entire frame, record a measurement
+        of what the frame's cells is made of
+        """
+
+        return pl.DataFrame(
+            {
+                "ID": self.ID,
+                "side": side,
+                "bees": bees,
+                "empty cells": empty_cells,
+                "done cells": drone_cells,
+                "capped brood cells": capped_brood_cells,
+                "uncapped brood cells": uncapped_brood_cells,
+                "capped honey cells": capped_honey_cells,
+                "uncapped honey cells": uncapped_honey_cells,
+                "pollen cells": pollen_cells,
+                "queen cells": queen_cells,
+                "timestamp": datetime.now(nyc)
+            },
+            schema=
+            {
+                "ID": pl.String,
+                "side": pl.String,
+                "bees": pl.Int64,
+                "empty cells": pl.Int64,
+                "done cells": pl.Int64,
+                "capped brood cells": pl.Int64,
+                "uncapped brood cells": pl.Int64,
+                "capped honey cells": pl.Int64,
+                "uncapped honey cells": pl.Int64,
+                "pollen cells": pl.Int64,
+                "queen cells": pl.Int64,
+                "timestamp": pl.Datetime,
+
+            }
+        )
+    
+    def load_measurements(self, measurements: pl.DataFrame) -> None:
+        """
+        Given the overall measurements dataframe, select the measurements relevant to this frame.
+        """
+
+        self.measurements = measurements.filter(pl.col("ID").eq(self.ID))
+
+    def change_ID(self, ID: str, frame_dataframe: pl.DataFrame) -> None:
+        """
+        Given a new ID, change the current ID.
+
+        This requires the overall frame dataframe to update all prior entries
+        """
+
+        revised_dataframe = frame_dataframe.with_columns(
+            pl.when(pl.col("frame ID").eq(self.ID)
+                    ).then(ID
+                           ).otherwise(pl.col("frame ID")).alias("frame ID")
+        )
+
+        self.ID = ID
+
+        return revised_dataframe
+    
+    def change_position(self, position: int) -> None:
+        """
+        Given a new position, change the current position.
+        """
+
+        self.position = position
+
+
+
 if __name__ == "__main__":
-    # create a new hive
+    pass
 
-    # load the notes
-    note_df = pl.read_parquet("note.parquet")
+    # # make connection
+    # blob = establish_connection(load_local_credential("blank.txt"))
 
-    # load the hives
-    hive_df = pl.read_parquet("hive.parquet")
+    # # make a hive
+    # test_hive = hive(
+    #     "test hive",
+    #     "test owner",
+    #     False,
+    #     1
+    # )
 
-    test_hive = hive("test hive")
+    # hive_note = test_hive.create_note("upkeep", "created new hive to test functionality of software")
 
-    test_hive.load(hive_df)
+    # # make box
+    # test_box = box(
+    #     "test box",
+    #     test_hive,
+    #     1,
+    #     8
+    # )
 
-    print(test_hive.save())
+    # box_note = test_box.create_note("upkeep", "created a new box to test functionality")
 
-    test_hive.load_notes(note_df)
+    # # make a test frame
+    # test_frame = frame(
+    #     "test frame",
+    #     test_box,
+    #     position=1
+    # )
 
-    print(test_hive.notes)
+    # frame_note = test_frame.create_note("upkeep", "created a new frame to test functionality")
 
+    # measurements = test_frame.create_measurement(
+    #     "left",
+    #     7,
+    #     1,
+    #     4,
+    #     0,
+    #     1,
+    #     9,
+    #     4,
+    #     0,
+    #     0
+    # )
 
-    # test_hive = hive("test hive",
-    #                  "cemetary",
-    #                  False,
-    #                  1)
-    
-    # test_hive.change_position(2)
+    # notes = pl.concat([hive_note, box_note, frame_note])
 
-    # test_hive.retire()
+    # # upload the data
 
+    # write_blob(blob, container, "hives.parquet", test_hive.save())
+    # write_blob(blob, container, "boxes.parquet", test_box.save())
+    # write_blob(blob, container, "frames.parquet", test_frame.save())
+    # write_blob(blob, container, "measurements.parquet", measurements)
+    # write_blob(blob, container, "notes.parquet", notes)
 
-    # test_hive.create_note("queen", "queen bee spotted dancing on top of hive")
-    
-    # test_hive.save()
