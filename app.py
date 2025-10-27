@@ -222,6 +222,26 @@ def push_dict(choice: Literal["hives", "boxes", "frames", "all"], name:str = Non
         write_blob(blob_client, "cemetery", "hives.parquet", h_dfs)
 
             
+def push_dfs(choice: Literal["notes", "measurements"], layer: Literal["hives", "boxes", "frames"], name:str, df:pl.DataFrame) -> None:
+    """
+    Based on the user choice, upload the notes
+    """
+    global notes
+    global measurements
+    global blob_client
+    global hives
+
+    if choice == "notes":
+        
+        # combine the notes and upload
+        notes = pl.concat([notes, df]).unique()
+
+        # push the notes
+        write_blob(blob_client, "cemetery", "notes.parquet", notes)
+
+        # update the notes of the hive, box, or frame
+        if layer == "hives":
+            hives[name].load_notes(notes)
 
 
 # TODO: define functions that will push and pull from the cloud
@@ -296,6 +316,8 @@ with ui.navset_tab(id="tabs"):
             ui.card_header("Notes")
 
             # reactively populate with the current hive's notes
+
+            
             @render.data_frame
             def hive_note_df():
                 global hives
@@ -303,7 +325,9 @@ with ui.navset_tab(id="tabs"):
                 # if the hive exists, return its notes
                 if input["select_hive"]() in list(hives.keys()):
                     if hives[input["select_hive"]()].notes is not None:
-                        return render.DataGrid(hives[input["select_hive"]()].notes, filters=True)
+                        return render.DataGrid(hives[input["select_hive"]()].notes.sort(pl.col("timestamp")),
+                                                filters=True,
+                                                height="300px")
                     else:
                         return render.DataGrid(pl.DataFrame({"No Notes": "No notes have been created"}))
 
@@ -358,6 +382,9 @@ def connect():
 
     # TODO REMOVE WHEN PUSHED
     connection_str = load_local_credential("blank.txt")
+
+    # process the account key into the access string
+    connection_str = f"DefaultEndpointsProtocol=https;AccountName=beeframe;AccountKey={connection_str};EndpointSuffix=core.windows.net"
 
 
     # attempt to establish the connection
@@ -482,8 +509,155 @@ def process_retire_hive():
 @reactive.event(input.retire_hive_cancel)
 def process_retire_hive_cancel():
     ui.modal_remove()
-    
 
+@reactive.effect
+@reactive.event(input.hive_change_position)
+def position_hive():
+    # handle the user clicking the retire hive button 
+
+    global hives
+
+    current_position = hives[input.select_hive()].position
+
+    m = ui.modal( ui.input_numeric("hive_position", "Integer:",value = current_position,  min=1, step=1),
+                 ui.div(
+   
+    ui.input_action_button("position_hive_submit", "Confirm"),
+    ui.input_action_button("position_hive_cancel", "Cancel"), style="text-align: center;"
+    ),
+    title=ui.div(f"Enter the new position, current position: {current_position}", style="text-align: center;"
+    ),  
+    easy_close=False,  
+    footer=None,  
+    )
+
+    ui.modal_show(m)
+
+@reactive.effect
+@reactive.event(input.position_hive_submit)
+async def process_position_hive():
+    # if the user hits submit update the data
+    global hives
+
+    # update the position
+    hives[input.select_hive()].position = input.hive_position()
+
+    # push the update
+    push_dict("hives", input.select_hive())
+
+    # refresh the hive parameter dataset
+    await hive_param_df.update_data(hives[input.select_hive()].save())
+
+    ui.modal_remove()
+
+@reactive.effect
+@reactive.event(input.position_hive_cancel)
+def position_hive_cancel():
+    ui.modal_remove()
+
+@reactive.effect
+@reactive.event(input.hive_change_owner)
+def owner_hive():
+    # handle the user clicking the retire hive button 
+
+    global hives
+
+    current_owner = hives[input.select_hive()].owner
+
+    m = ui.modal(
+                 ui.div(
+    ui.input_text("owner_hive", "Enter a new owner:", width="100%"),
+    ui.input_action_button("owner_hive_submit", "Confirm"),
+    ui.input_action_button("owner_hive_cancel", "Cancel"), style="text-align: center;"
+    ),
+    title=ui.div(f"Enter the new owner, current owner: {current_owner}", style="text-align: center;"
+    ),  
+    easy_close=False,  
+    footer=None,  
+    )
+
+    ui.modal_show(m)
+
+@reactive.effect
+@reactive.event(input.owner_hive_submit)
+async def process_owner_hive():
+    # if the user hits submit update the data
+    global hives
+
+    # update the position
+    hives[input.select_hive()].owner = input.owner_hive()
+
+    # push the update
+    push_dict("hives", input.select_hive())
+
+    # refresh the hive parameter dataset
+    await hive_param_df.update_data(hives[input.select_hive()].save())
+
+    ui.modal_remove()
+
+@reactive.effect
+@reactive.event(input.owner_hive_cancel)
+def owner_hive_cancel():
+    ui.modal_remove()
+
+@reactive.effect
+@reactive.event(input.hive_create_note)
+def hive_note():
+    # prompt the user to input a note
+
+    m = ui.modal(
+    ui.div(ui.h1(f"Enter the note parameters"), style="text-align: center;"
+    ),
+    ui.div(
+    ui.input_select("hive_nature", "Choose a category:",
+                    selected=None,choices=["Disease",
+                        "Maintenance",
+                        "Other"
+                                            "Pest",
+
+                        "Queen",
+                          "Temperament",
+                                           "Treatment",
+                                           "Test"], width="100%",),
+    ui.input_text_area("hive_note", "Full description:", width="100%",),
+    
+    ui.input_action_button("note_hive_submit", "Confirm"),
+    ui.input_action_button("note_hive_cancel", "Cancel"), style="text-align: center;"
+    ),
+ 
+    easy_close=False,  
+    footer=None,  
+    )
+
+    ui.modal_show(m)
+
+@reactive.effect
+@reactive.event(input.note_hive_submit)
+async def submit_hive_note():
+    global hives
+
+    # process when the user submits a hive note
+    if input.hive_nature() is None or input.hive_note().strip() == "":
+        ui.notification_show("Both inputs need to be provided", duration=5)
+    else:
+        # if the user provides an input to both value
+
+        # create the note for the hive
+        note = hives[input.select_hive()].create_note(input.hive_nature().strip(), input.hive_note().strip())
+        
+        # push the note update
+        push_dfs("notes", "hives", input.select_hive(), note)
+
+        # update the notes dataframe
+        await hive_note_df.update_data(hives[input.select_hive()].notes.sort(pl.col("timestamp")))
+    
+        ui.modal_remove()
+
+@reactive.effect
+@reactive.event(input.note_hive_cancel)
+def cancel_hive_note():
+    # cancel the hive note submission
+    ui.modal_remove()
 
 @reactive.effect
 @reactive.event(input.create_hive)
