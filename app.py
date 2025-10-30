@@ -325,7 +325,7 @@ with ui.navset_tab(id="tabs"):
                 # if the hive exists, return its notes
                 if input["select_hive"]() in list(hives.keys()):
                     if hives[input["select_hive"]()].notes is not None:
-                        return render.DataGrid(hives[input["select_hive"]()].notes.sort(pl.col("timestamp")),
+                        return render.DataGrid(hives[input["select_hive"]()].notes.sort(pl.col("timestamp"), descending=True),
                                                 filters=True,
                                                 height="300px")
                     else:
@@ -649,7 +649,7 @@ async def submit_hive_note():
         push_dfs("notes", "hives", input.select_hive(), note)
 
         # update the notes dataframe
-        await hive_note_df.update_data(hives[input.select_hive()].notes.sort(pl.col("timestamp")))
+        await hive_note_df.update_data(hives[input.select_hive()].notes.sort(pl.col("timestamp"), descending=True))
     
         ui.modal_remove()
 
@@ -657,6 +657,110 @@ async def submit_hive_note():
 @reactive.event(input.note_hive_cancel)
 def cancel_hive_note():
     # cancel the hive note submission
+    ui.modal_remove()
+
+@reactive.effect
+@reactive.event(input.hive_change_ID)
+def hive_name():
+    # prompt the user to change the name
+
+    m = ui.modal(
+    ui.div(ui.h1(f"Enter a new hive name"),
+           ui.h6("Leave empty if you want name to be auto-generated"), style="text-align: center;"
+    ),
+    ui.div(
+    ui.input_text("hive_name", "New name:", width="100%",),
+    
+    ui.input_action_button("name_hive_submit", "Confirm"),
+    ui.input_action_button("name_hive_cancel", "Cancel"), style="text-align: center;"
+    ),
+ 
+    easy_close=False,  
+    footer=None,  
+    )
+
+    ui.modal_show(m)
+
+@reactive.effect
+@reactive.event(input.name_hive_submit)
+async def submit_hive_name():
+    global hives
+    global blob_client
+
+    # process whether the name needs to be randomly generated or not
+    if input.hive_name().strip() == "":
+        # if the string is empty, produce a new name
+        name = names.get_full_name()
+    else:
+        name = input.hive_name().strip()   
+    
+    # we now need to rewrite all of the cloud entries of the hive ID
+    # this effects the notes, hive, and box datasets
+
+    h_df = load_blob(blob_client, "cemetery", "hives.parquet")
+
+    b_df = load_blob(blob_client, "cemetery", "boxes.parquet")
+
+    n = load_blob(blob_client, "cemetery", "notes.parquet")
+
+    h_df = h_df.with_columns(
+        # change the ID
+        pl.when(pl.col("hive ID").eq(input.select_hive())).then(pl.lit(name)).otherwise(pl.col("hive ID")).alias("hive ID")
+    )
+
+    b_df = b_df.with_columns(
+        # change the ID
+        pl.when(pl.col("hive ID").eq(input.select_hive())).then(pl.lit(name)).otherwise(pl.col("hive ID")).alias("hive ID")
+    )
+
+    n = n.with_columns(
+        # change the ID
+        pl.when(pl.col("ID").eq(input.select_hive())).then(pl.lit(name)).otherwise(pl.col("ID")).alias("ID")
+    )
+
+    # update the dictionary to the new entry
+    hives[input.select_hive()].ID = name
+    hives[input.select_hive()].load_notes(n)
+    hives[name] = hives[input.select_hive()]
+
+    # delete the new entry
+    hives.pop(input.select_hive())
+
+    # update the hive selection
+    # if the input switch is switched on select only hives that have been retired
+    if input.switch_retired():
+        ui.update_select(
+        "select_hive",
+        choices=[h for h in list(hives.keys()) if hives[h].retired],
+        selected = name
+
+        )
+    else:
+        ui.update_select(
+        "select_hive",
+        choices=[h for h in list(hives.keys()) if not hives[h].retired],
+        selected = name
+
+        )
+
+    # designate the reactive value indicating that the hives were done updating
+    hives_selection_updated.set(not hives_selection_updated.get())
+
+    # push the changes to the cloud
+    write_blob(blob_client, "cemetery", "hives.parquet", h_df)
+
+    write_blob(blob_client, "cemetery", "boxes.parquet", b_df)
+
+    write_blob(blob_client, "cemetery", "notes.parquet", n)
+
+    ui.modal_remove()
+
+    
+
+@reactive.effect
+@reactive.event(input.name_hive_cancel)
+def cancel_hive_name():
+    # cancel the hive name submission
     ui.modal_remove()
 
 @reactive.effect
