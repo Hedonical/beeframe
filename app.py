@@ -636,10 +636,6 @@ def server(input, output, session):
             ui.strong(f"Queen cells: {row['queen_cells']}"), class_="measurement-card",
         ) for row in rows], class_="measurement-history")
 
-    def select_default_equipment(hive_id):
-        rows = state.rows("equipment", parent_hive_id=hive_id)
-        state.selected["equipment"] = rows[0]["id"] if rows else None
-
     def select_entity(level, record_id):
         previous_apiary = state.selected["apiary"]
         previous_hive = state.selected["hive"]
@@ -650,7 +646,7 @@ def server(input, output, session):
         elif level == "hive":
             row = state.record("hives", record_id)
             if not row: return
-            state.select("apiary", row["parent_apiary_id"]); state.select("hive", record_id); select_default_equipment(record_id)
+            state.select("apiary", row["parent_apiary_id"]); state.select("hive", record_id)
         elif level == "box":
             row = state.record("boxes", record_id)
             if not row: return
@@ -725,7 +721,6 @@ def server(input, output, session):
         if state.selected["frame"]: state.select("box", state.selected["box"])
         elif state.selected["box"]:
             state.select("hive", state.selected["hive"])
-            select_default_equipment(state.selected["hive"])
         elif state.selected["hive"]: state.select("apiary", state.selected["apiary"])
         else: state.select("apiary", None)
         if state.selected["apiary"] != previous_apiary or state.selected["hive"] != previous_hive:
@@ -1154,7 +1149,6 @@ def server(input, output, session):
         appends = [] if existing else [{"sheet": "equipment_types", "rows": [equipment_type]}]
         appends.append({"sheet": "equipment", "rows": records})
         await mutate(appends=appends)
-        state.selected["equipment"] = records[0]["id"]
 
     @reactive.effect
     @reactive.event(input.measurement_save)

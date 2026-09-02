@@ -123,6 +123,7 @@ def test_hives_can_move_and_equipment_has_one_creation_flow():
     assert 'input_numeric("move_grid_column"' not in app and 'input_numeric("move_grid_row"' not in app
     assert 'input_selectize("equipment_name"' in app
     assert "choose_equipment_type" not in app and "manage_equipment_types" not in app
+    assert "select_default_equipment" not in app
 
 
 def test_equipment_edit_box_attribute_search_and_apiary_summary():
