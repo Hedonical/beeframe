@@ -120,9 +120,14 @@ def validate_workbook(data: dict[str, pl.DataFrame]) -> list[ValidationIssue]:
             issues.append(ValidationIssue("hives", 0, "grid_column/grid_row", (row["grid_column"], row["grid_row"]), "one active hive per apiary grid cell"))
 
     if "notes" in data:
-        targets = {name[:-1]: set(data[name]["id"].to_list()) for name in ("apiaries", "hives", "boxes", "frames") if name in data}
-        if "equipment" in data:
-            targets["equipment"] = set(data["equipment"]["id"].to_list())
+        targets = {
+            target_type: set(data[sheet]["id"].to_list())
+            for target_type, sheet in (
+                ("apiary", "apiaries"), ("hive", "hives"), ("box", "boxes"),
+                ("frame", "frames"), ("equipment", "equipment"),
+            )
+            if sheet in data
+        }
         for offset, row in enumerate(data["notes"].iter_rows(named=True), 2):
             if not row.get("archived") and row.get("target_id") not in targets.get(row.get("target_type"), set()):
                 issues.append(ValidationIssue("notes", offset, "target_id", row.get("target_id"), "an existing target id of target_type"))

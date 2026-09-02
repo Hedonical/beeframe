@@ -291,6 +291,14 @@
       if (request.action === "disconnect") { selectedSpreadsheet = null; return { disconnected: true }; }
       if (request.action === "load_workbook") return mockData || mockWorkbook();
       if (request.action === "mutate") return mockMutate(request);
+      if (request.action === "append") {
+        const result = mockMutate({ appends: [{ sheet: request.sheet, rows: request.rows }] });
+        return { sheet: request.sheet, values: result.sheets[request.sheet] };
+      }
+      if (request.action === "update_by_id") {
+        const result = mockMutate({ updates: [{ sheet: request.sheet, id: request.id, values: request.values, recognizedColumns: request.recognizedColumns }] });
+        return { sheet: request.sheet, values: result.sheets[request.sheet] };
+      }
       throw new Error("This write is not implemented in local mock mode.");
     }
     if (request.action === "choose_sheet") { await authorize(accessToken ? "" : "consent"); await ensurePicker(); showPicker(target, requestId); return null; }

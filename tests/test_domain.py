@@ -107,6 +107,8 @@ def test_note_ordering_and_recent_measurement_warning():
 def test_measurement_bounds_are_validated():
     measurement = record("measurements", parent_frame_id=new_id(), scope="both", comb_color="white", bees=101, empty_cells=0, drone_cells=0, capped_brood_cells=0, uncapped_brood_cells=0, capped_honey_cells=0, uncapped_honey_cells=0, pollen_cells=0, queen_cells=0)
     assert any(issue.column == "bees" for issue in validate_record("measurements", measurement))
+    measurement["bees"] = 0; measurement["queen_cells"] = 6
+    assert any(issue.column == "queen_cells" for issue in validate_record("measurements", measurement))
 
 
 def test_active_uniqueness_is_scoped_and_allows_archived_reuse():
@@ -167,6 +169,14 @@ def test_notes_can_target_equipment():
     data["equipment"] = frame("equipment", [item])
     data["notes"] = frame("notes", [note])
     assert not any(issue.sheet == "notes" and issue.column == "target_id" for issue in validate_workbook(data))
+
+
+def test_notes_can_target_apiaries_without_being_repaired_as_orphans():
+    data, apiary, _, _, _ = hierarchy_workbook()
+    note = record("notes", target_type="apiary", target_id=apiary["id"], nature="Other", description="Checked entrance.", archived=False, archived_at=None)
+    data["notes"] = frame("notes", [note])
+    assert not any(issue.sheet == "notes" and issue.column == "target_id" for issue in validate_workbook(data))
+    assert not repair_legacy_integrity(data, NOW)["notes"]["archived"][0]
 
 
 def test_duplicate_grid_occupancy_is_rejected():

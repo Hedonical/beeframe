@@ -57,7 +57,8 @@ def test_relational_tabs_and_frame_measurement_action():
     assert 'ui.nav_panel("Measure", measurement_form())' in app
     assert "measurement_recent_ok" not in app
     assert 'apiary_grid(apiary, state.rows("hives"' in app
-    assert 'ui.strong(row["name"])' in app and '"Equipment ×{len(equipment)}"' in app
+    assert 'ui.strong(row["name"])' in app and 'f"Equipment · {len(equipment)}"' in app
+    assert 'input_action_button("equipment_panel"' not in app
     assert 'ui.div(ui.strong(row["code"]), ui.tags.small(equipment_types.get(row["equipment_type_id"], "Equipment"))' in app
     assert 'ui.p(equipment_types.get(selected_equipment["equipment_type_id"]' not in app
     assert '} box | {len(state.rows(\'equipment\'' in app
@@ -65,6 +66,8 @@ def test_relational_tabs_and_frame_measurement_action():
     assert 'class_="hive-contents-inline"' in app
     assert 'ui.span("Bottom"' in app and 'ui.span("Top"' in app
     assert '], class_="relational-strip boxes"),\n                    ui.span("Top"' in app
+    assert 'ui.span("Left", class_="stack-end frame-left")' in app
+    assert 'ui.span("Right", class_="stack-end frame-right")' in app
     assert "grid-template-columns:1.1rem minmax(0,1fr) 1.1rem auto" in styles
     assert '("frames", "frame", "Frames", "name")' in app
     assert 'if state.archived_mode and selected_hive' in app
@@ -145,7 +148,8 @@ def test_box_and_frame_positions_can_be_edited_or_dragged():
     assert 'position = int(form["edit_box_position"])' in app and 'position = int(form["edit_frame_position"])' in app
     assert 'result = move_entities(result, context["sheet"]' in app
     assert 'data_reorder_level="box"' in app and 'data_reorder_level="frame"' in app
-    assert 'data_reorder_handle="true"' in app and 'event.target.closest("[data-reorder-handle]")' in javascript
+    assert 'data_reorder_handle="true"' not in app and "HOLD_TO_REORDER_MS = 500" in javascript
+    assert "function showReorderHint(item, target = null)" in javascript and "reorderPositionLabel(target)" in javascript
     assert 'Shiny.setInputValue("reorder_request"' in javascript and 'document.addEventListener("pointermove"' in javascript
     assert "def _reorder_request():" in app and ".position-steps" in styles and ".is-drop-target" in styles
     assert 'position = target["position"]' in app
@@ -208,13 +212,17 @@ def test_submit_actions_are_locked_against_double_clicks():
     assert ".submit-once.is-submitting" in styles
 
 
-def test_measurement_form_is_glove_friendly_and_can_copy_previous():
+def test_measurement_form_is_glove_friendly():
     app = (ROOT / "app.py").read_text()
     javascript = (ROOT / "www/app-ui.js").read_text()
     styles = (ROOT / "www/styles.css").read_text()
-    assert "ui.input_slider" not in app
-    assert "data_measurement_value" in app and "data_measurement_delta" in app
-    assert 'data_measurement_clear="true"' in app and '"measurement_copy_last"' in app
-    assert "def _measurement_copy_last():" in app and 'ui.update_numeric("measurement_queen"' in app
-    assert "setMeasurementValue" in javascript and "updateMeasurementPreset" in javascript
-    assert ".measurement-presets" in styles and ".measurement-save" in styles
+    assert 'type="range"' in app and 'class_="measurement-slider"' in app
+    assert "data_measurement_value" not in app and "data_measurement_delta" not in app
+    assert 'ui.input_radio_buttons("measurement_color", "Comb color", ("white", "brown", "black")' in app
+    assert "--frame-comb-color" in app
+    assert 'data_measurement_clear="true"' not in app and '"measurement_copy_last"' not in app
+    assert "setMeasurementValue" in javascript and ".measurement-slider" in javascript
+    assert "updateMeasurementPreset" not in javascript
+    assert ".measurement-slider::-webkit-slider-runnable-track" in styles and ".measurement-save" in styles
+    assert ".measurement-segment .form-check-label" in styles and "border-radius:.2rem" in styles
+    assert ".btn-primary" in styles and "color:white!important" in styles

@@ -43,6 +43,21 @@ def column_label(column):
     return chr(64 + column)
 
 
+def comb_color_value(value):
+    return {"white": 1, "brown": 5, "black": 10}.get(str(value).casefold(), 1)
+
+
+def comb_color_label(value):
+    return str(value).title()
+
+
+def comb_color_hex(value):
+    number = comb_color_value(value)
+    low, middle, high = ((249, 246, 234), (151, 100, 57), (37, 33, 29))
+    start, end, fraction = (low, middle, (number - 1) / 4) if number <= 5 else (middle, high, (number - 5) / 5)
+    return "#" + "".join(f"{round(a + (b - a) * fraction):02x}" for a, b in zip(start, end))
+
+
 def apiary_grid(apiary, hives=(), selected_hive_id=None, editor=False, selected_point=None, editing_hive_id=None, editing_hive_ids=()):
     occupied = {(hive["grid_column"], hive["grid_row"]): hive for hive in hives}
     editable_hive_ids = {*editing_hive_ids, *([editing_hive_id] if editing_hive_id else [])}
@@ -132,7 +147,6 @@ def server(input, output, session):
     status = reactive.value("")
     grid_point = reactive.value(None)
     editing_note = reactive.value(None)
-    equipment_open = reactive.value(False)
     workflow_kind = reactive.value(None)
     pending = {}
     contexts = {}
@@ -286,9 +300,12 @@ def server(input, output, session):
                         *[ui.div(code, class_="code-result") for code in context["equipment_codes"]],
                         title="Equipment saved", easy_close=False, footer=ui.modal_button("Close"),
                     ))
+                elif context.get("reopen_notes"):
+                    ui.modal_remove()
+                    notes()
                 else:
                     ui.modal_remove()
-                ui.notification_show("Saved", type="message", duration=3)
+                ui.notification_show("Saved", type="message", duration=1.5)
             except Exception as error:
                 status.set(f"Google saved the write, but refreshed data is invalid: {error}")
         elif context.get("action") == "mutate":
@@ -307,7 +324,7 @@ def server(input, output, session):
                 else:
                     status.set("Saved to Google Sheets.")
                 ui.modal_remove()
-                ui.notification_show("Saved", type="message", duration=3)
+                ui.notification_show("Saved", type="message", duration=1.5)
             except Exception as error:
                 status.set(f"Google saved the write, but refreshed data is invalid: {error}")
         elif data.get("disconnected"):
@@ -467,34 +484,31 @@ def server(input, output, session):
     def measurement_form():
         fields = [(name, field.label) for name, field in SCHEMAS["measurements"].items() if field.maximum == 100]
 
-        def control(name, label, maximum=100, step=5, presets=(0, 25, 50, 75, 100)):
+        def control(name, label, maximum=100, step=5):
             input_id = f"measurement_{name}"
+            colors = {
+                "bees": ("#9cc8f5", "#edf6ff"), "empty_cells": ("#d7dce2", "#f4f5f6"),
+                "drone_cells": ("#cbb6eb", "#f4effc"), "capped_brood_cells": ("#f0aeaa", "#fff0ef"),
+                "uncapped_brood_cells": ("#f6c79a", "#fff5e9"), "capped_honey_cells": ("#f3d47c", "#fff9df"),
+                "uncapped_honey_cells": ("#f6e99a", "#fffde5"), "pollen_cells": ("#aad6a1", "#f1faef"),
+                "queen": ("#e6b2d0", "#fff0f8"),
+            }
+            color, surface = colors[name]
             return ui.div(
-                ui.div(ui.strong(label), ui.input_numeric(input_id, "", 0, min=0, max=maximum, step=step), class_="measurement-control-heading"),
-                ui.div(*[
-                    ui.tags.button(str(value), type="button", class_=f"measurement-preset{' is-selected' if value == 0 else ''}", data_measurement_input=input_id, data_measurement_value=value)
-                    for value in presets
-                ], class_="measurement-presets"),
                 ui.div(
-                    ui.tags.button(f"−{step}", type="button", class_="measurement-step", data_measurement_input=input_id, data_measurement_delta=-step),
-                    ui.tags.button(f"+{step}", type="button", class_="measurement-step", data_measurement_input=input_id, data_measurement_delta=step),
-                    class_="measurement-steps",
+                    ui.strong(label),
+                    ui.tags.input(type="range", id=f"{input_id}_slider", min=0, max=maximum, step=step, value=0, class_="measurement-slider", data_measurement_input=input_id, aria_label=f"{label} value"),
+                    ui.input_numeric(input_id, "", 0, min=0, max=maximum, step=step),
+                    class_="measurement-control-heading",
                 ),
-                class_="measurement-control",
+                class_="measurement-control", style=f"--measurement-color:{color};--measurement-surface:{surface}",
             )
 
-        frame_id = state.selected["frame"]
-        has_previous = bool(state.rows("measurements", include_all=True, parent_frame_id=frame_id)) if frame_id else False
         return ui.div(
             ui.div(ui.input_radio_buttons("measurement_scope", "Area", {"both": "Whole", "left": "Left", "right": "Right"}, selected="both", inline=True), class_="measurement-segment"),
             ui.div(ui.input_radio_buttons("measurement_color", "Comb color", ("white", "brown", "black"), selected="white", inline=True), class_="measurement-segment"),
-            ui.div(
-                ui.input_action_button("measurement_copy_last", "Copy previous", class_="measurement-utility", disabled=not has_previous),
-                ui.tags.button("Clear values", type="button", class_="measurement-utility", data_measurement_clear="true"),
-                class_="measurement-utilities",
-            ),
             *[control(name, label) for name, label in fields],
-            control("queen", "Queen cells", maximum=100, step=1, presets=(0, 1, 2, 3, 5)),
+            control("queen", "Queen cells", maximum=5, step=1),
             ui.input_action_button("measurement_save", "Save measurement", class_="btn-primary submit-once measurement-save"),
             class_="measurement-form",
         )
@@ -553,26 +567,25 @@ def server(input, output, session):
             if state.archived_mode and selected_equipment and all(row["id"] != selected_equipment["id"] for row in equipment):
                 equipment.insert(0, selected_equipment)
             children[0].append(ui.div(
-                ui.div("Boxes and equipment", class_="contents-label"),
+                ui.div("Boxes", class_="contents-label"),
                 ui.div(
                     ui.span("Bottom", class_="stack-end stack-bottom"),
                     ui.div(*[
                         script_button(
-                            ui.div(ui.span(row["name"]), ui.span("⠿", class_="drag-grip", data_reorder_handle="true", aria_hidden="true"), class_="reorder-label"), "box", row["id"],
+                            row["name"], "box", row["id"],
                             f"box-choice{' is-selected' if selected_box and row['id'] == selected_box['id'] else ''}",
-                            data_reorder_level="box", data_reorder_parent=row["parent_hive_id"], data_reorder_position=row["position"], title="Use the grip to reorder box",
+                            data_reorder_level="box", data_reorder_parent=row["parent_hive_id"], data_reorder_position=row["position"], title="Long press to reorder box",
                         ) for row in boxes
                     ], class_="relational-strip boxes"),
                     ui.span("Top", class_="stack-end stack-top"),
-                    ui.input_action_button("equipment_panel", f"Equipment ×{len(equipment)}", class_=f"equipment-choice{' is-selected' if equipment_open.get() else ''}"),
                     class_="stack-selector",
                 ) if boxes or equipment else ui.p("No boxes or equipment yet. Use Add to create one.", class_="empty-inline"),
                 class_="hive-contents-inline",
             ))
-            if equipment_open.get():
+            if not selected_box:
                 equipment_types = {row["id"]: row["name"] for row in state.rows("equipment_types", include_all=True)}
                 children.append(ui.tags.section(
-                    ui.div(ui.span("Equipment"), ui.strong(selected_equipment["code"] if selected_equipment else "None"), class_="selection-heading"),
+                    ui.div(ui.span(f"Equipment · {len(equipment)}"), ui.strong(selected_equipment["code"] if selected_equipment else "None"), class_="selection-heading"),
                     ui.div(*[script_button(
                         ui.div(ui.strong(row["code"]), ui.tags.small(equipment_types.get(row["equipment_type_id"], "Equipment")), class_="equipment-label"),
                         "equipment", row["id"], f"equipment-choice{' is-selected' if selected_equipment and row['id'] == selected_equipment['id'] else ''}",
@@ -586,13 +599,18 @@ def server(input, output, session):
                     frames.insert(0, selected_frame)
                 children.append(ui.tags.section(
                     ui.div(ui.span("Box"), ui.strong(selected_box["name"]), ui.tags.small(f"{box_type_label(selected_box['type'])} · {selected_box['max_frames']}-frame"), class_="selection-heading"),
-                    ui.div(*[
-                        script_button(
-                            ui.div(ui.span(row["name"]), ui.span("⠿", class_="drag-grip", data_reorder_handle="true", aria_hidden="true"), class_="reorder-label"), "frame", row["id"],
-                            f"frame-choice{' over-capacity' if row['position'] >= selected_box['max_frames'] else ''}{' is-selected' if selected_frame and row['id'] == selected_frame['id'] else ''}",
-                            data_reorder_level="frame", data_reorder_parent=row["parent_box_id"], data_reorder_position=row["position"], title="Use the grip to reorder frame",
-                        ) for row in frames
-                    ], class_="relational-strip frames") if frames else ui.p("No frames yet. Use Add to create one.", class_="empty-inline"),
+                    ui.div(
+                        ui.span("Left", class_="stack-end frame-left"),
+                        ui.div(*[
+                            script_button(
+                                row["name"], "frame", row["id"],
+                                f"frame-choice{' over-capacity' if row['position'] >= selected_box['max_frames'] else ''}{' is-selected' if selected_frame and row['id'] == selected_frame['id'] else ''}",
+                                data_reorder_level="frame", data_reorder_parent=row["parent_box_id"], data_reorder_position=row["position"], title="Long press to reorder frame",
+                            ) for row in frames
+                        ], class_="relational-strip frames"),
+                        ui.span("Right", class_="stack-end frame-right"),
+                        class_="frame-selector",
+                    ) if frames else ui.p("No frames yet. Use Add to create one.", class_="empty-inline"),
                     class_="level relationship-tab box-tab",
                 ))
                 if selected_frame:
@@ -613,10 +631,14 @@ def server(input, output, session):
         excluded = {"id", "parent_frame_id", "scope", "comb_color", "queen_cells", "created_at", "updated_at", "is_archived"}
         percent_fields = [(name, SCHEMAS["measurements"][name].label) for name in SCHEMAS["measurements"] if name not in excluded]
         return ui.div(*[ui.tags.article(
-            ui.div(ui.strong(display_time(row["created_at"])), ui.span(f"{row['scope']} · {row['comb_color']}"), class_="card-heading"),
+            ui.div(ui.strong(display_time(row["created_at"])), ui.span(f"{row['scope']} · {comb_color_label(row['comb_color'])}"), class_="card-heading"),
             *[ui.div(ui.span(label), ui.tags.progress(value=row[name], max=100), ui.span(f"{row[name]}%"), class_="measure-row") for name, label in percent_fields],
             ui.strong(f"Queen cells: {row['queen_cells']}"), class_="measurement-card",
         ) for row in rows], class_="measurement-history")
+
+    def select_default_equipment(hive_id):
+        rows = state.rows("equipment", parent_hive_id=hive_id)
+        state.selected["equipment"] = rows[0]["id"] if rows else None
 
     def select_entity(level, record_id):
         previous_apiary = state.selected["apiary"]
@@ -625,16 +647,15 @@ def server(input, output, session):
             state.archived_mode = True
             for key in state.selected:
                 state.selected[key] = None
-            equipment_open.set(False)
         elif level == "hive":
             row = state.record("hives", record_id)
             if not row: return
-            state.select("apiary", row["parent_apiary_id"]); state.select("hive", record_id); equipment_open.set(False)
+            state.select("apiary", row["parent_apiary_id"]); state.select("hive", record_id); select_default_equipment(record_id)
         elif level == "box":
             row = state.record("boxes", record_id)
             if not row: return
             hive = state.record("hives", row["parent_hive_id"])
-            state.select("apiary", hive["parent_apiary_id"]); state.select("hive", hive["id"]); state.select("box", record_id); equipment_open.set(False)
+            state.select("apiary", hive["parent_apiary_id"]); state.select("hive", hive["id"]); state.select("box", record_id)
         elif level == "frame":
             row = state.record("frames", record_id)
             if not row: return
@@ -648,7 +669,6 @@ def server(input, output, session):
                 state.select("apiary", hive["parent_apiary_id"]); state.select("hive", hive["id"])
             state.selected["box"] = None; state.selected["frame"] = None
             state.selected["equipment"] = record_id
-            equipment_open.set(True)
         elif level == "apiary":
             state.archived_mode = False
             state.select("apiary", record_id)
@@ -695,16 +715,6 @@ def server(input, output, session):
         grid_point.set(json.loads(input.hive_grid_point()))
 
     @reactive.effect
-    @reactive.event(input.equipment_panel)
-    def _equipment_panel():
-        hive_id = state.selected["hive"]
-        rows = state.rows("equipment", parent_hive_id=hive_id)
-        equipment_open.set(True)
-        state.selected["box"] = None; state.selected["frame"] = None
-        state.selected["equipment"] = rows[0]["id"] if rows else None
-        touch()
-
-    @reactive.effect
     @reactive.event(input.disconnect)
     async def _disconnect():
         await request("disconnect")
@@ -713,7 +723,9 @@ def server(input, output, session):
         previous_apiary = state.selected["apiary"]
         previous_hive = state.selected["hive"]
         if state.selected["frame"]: state.select("box", state.selected["box"])
-        elif state.selected["box"]: state.select("hive", state.selected["hive"])
+        elif state.selected["box"]:
+            state.select("hive", state.selected["hive"])
+            select_default_equipment(state.selected["hive"])
         elif state.selected["hive"]: state.select("apiary", state.selected["apiary"])
         else: state.select("apiary", None)
         if state.selected["apiary"] != previous_apiary or state.selected["hive"] != previous_hive:
@@ -921,7 +933,7 @@ def server(input, output, session):
                     stacked_bar("Comb", tuple((name.replace("_cells", "").replace("_", "-"), label, value) for name, label, value in comb_values), "Empty / no comb", "empty-comb"),
                     class_="frame-scope-bars",
                 ),
-                ui.div(measurement["comb_color"].title() if measurement else "No data", class_="compact-frame-meta"),
+                ui.div(comb_color_label(measurement["comb_color"]) if measurement else "No data", class_="compact-frame-meta"),
                 ui.div(f"{queen_cells} queen {'cell' if queen_cells == 1 else 'cells'}", class_="frame-queen-cells") if queen_cells else None,
                 class_="frame-scope-report",
             )
@@ -931,10 +943,12 @@ def server(input, output, session):
             right = latest.get((frame["id"], "right"))
             scopes = [("Left", left), ("Right", right)] if left or right else [("Whole", latest.get((frame["id"], "both")))]
             recorded = [measurement for _, measurement in scopes if measurement]
+            latest_measurement = max(recorded, key=lambda row: parse_utc(row["created_at"])) if recorded else None
             return ui.tags.article(
                 ui.div(ui.strong(frame["name"]), ui.span(display_time(max(recorded, key=lambda row: parse_utc(row["created_at"]))["created_at"]) if recorded else "Not measured"), class_="hive-frame-heading"),
                 ui.div(*[scope_visual(scope, measurement) for scope, measurement in scopes], class_="frame-scope-list"),
                 class_=f"hive-frame-report{' is-unmeasured' if not recorded else ''}",
+                style=f"--frame-comb-color:{comb_color_hex(latest_measurement['comb_color'])}" if latest_measurement else None,
             )
 
         def plot_legend():
@@ -966,7 +980,7 @@ def server(input, output, session):
             ui.div(
                 *[frame_visual(frame) for frame in frames_by_box[box["id"]]],
                 class_=f"hive-frame-list{' few-frames' if len(frames_by_box[box['id']]) < 5 else ''}",
-                style=f"--frame-count:{len(frames_by_box[box['id']])}",
+                style=f"--frame-count:{len(frames_by_box[box['id']])};--mobile-frame-count:{min(5, len(frames_by_box[box['id']]))}",
             ) if frames_by_box[box["id"]] else ui.p("No frames", class_="empty-inline"),
             class_="hive-box-report",
         ) for box in boxes]
@@ -1140,21 +1154,7 @@ def server(input, output, session):
         appends = [] if existing else [{"sheet": "equipment_types", "rows": [equipment_type]}]
         appends.append({"sheet": "equipment", "rows": records})
         await mutate(appends=appends)
-
-    @reactive.effect
-    @reactive.event(input.measurement_copy_last)
-    def _measurement_copy_last():
-        frame_id = state.selected["frame"]
-        rows = state.rows("measurements", include_all=True, parent_frame_id=frame_id) if frame_id else []
-        if not rows:
-            return
-        row = max(rows, key=lambda item: parse_utc(item["created_at"]))
-        ui.update_radio_buttons("measurement_scope", selected=row["scope"])
-        ui.update_radio_buttons("measurement_color", selected=row["comb_color"])
-        for name, field in SCHEMAS["measurements"].items():
-            if field.maximum == 100:
-                ui.update_numeric(f"measurement_{name}", value=row[name])
-        ui.update_numeric("measurement_queen", value=row["queen_cells"])
+        state.selected["equipment"] = records[0]["id"]
 
     @reactive.effect
     @reactive.event(input.measurement_save)
@@ -1166,14 +1166,15 @@ def server(input, output, session):
             ui.notification_show("Archived frames are read-only.", type="warning"); return
         values = {name: int(input[f"measurement_{name}"]()) for name, field in SCHEMAS["measurements"].items() if field.maximum == 100}
         queen_cells = int(input.measurement_queen())
-        signature = (frame_id, input.measurement_scope(), input.measurement_color(), *values.values(), queen_cells)
+        color = input.measurement_color()
+        signature = (frame_id, input.measurement_scope(), color, *values.values(), queen_cells)
         now = monotonic()
         if signature == last_measurement_save[0] and now - last_measurement_save[1] < 5:
             ui.notification_show("That measurement was already saved.", type="warning"); return
         if state.busy:
             ui.notification_show("A save is already in progress.", type="message"); return
         last_measurement_save = (signature, now)
-        await append("measurements", [base_record(parent_frame_id=frame_id, scope=input.measurement_scope(), comb_color=input.measurement_color(), **values, queen_cells=queen_cells)])
+        await append("measurements", [base_record(parent_frame_id=frame_id, scope=input.measurement_scope(), comb_color=color, **values, queen_cells=queen_cells)])
 
     def notes():
         level, _, record = selected_record(); target_level = level if level in ("apiary", "hive", "box", "frame", "equipment") else None
@@ -1222,7 +1223,7 @@ def server(input, output, session):
             ui.p("Select an apiary, hive, box, frame, or equipment item before adding a note.", class_="grid-instruction") if not target_level else None,
         )
         ui.modal_show(ui.modal(
-            ui.navset_tab(ui.nav_panel("Read notes", read_tab), ui.nav_panel("Add note", add_tab), selected="Read notes"),
+            ui.navset_tab(ui.nav_panel("Read notes", read_tab), ui.nav_panel("Add note", add_tab), selected="Add note"),
             title=f"Notes · {record.get('name', record.get('code', 'All')) if record else 'All'}", easy_close=True, footer=None, size="l",
         ))
 
@@ -1232,7 +1233,7 @@ def server(input, output, session):
         level, _, record = selected_record(); description = input.note_description().strip()
         if level not in ("apiary", "hive", "box", "frame", "equipment") or not description:
             ui.notification_show("Choose a target and enter a description.", type="error"); return
-        await append("notes", [base_record(target_type=level, target_id=record["id"], nature=input.note_nature(), description=description, archived=False, archived_at=None)])
+        await append("notes", [base_record(target_type=level, target_id=record["id"], nature=input.note_nature(), description=description, archived=False, archived_at=None)], context={"reopen_notes": True})
 
     @reactive.effect
     @reactive.event(input.note_action)
@@ -1407,7 +1408,6 @@ def server(input, output, session):
             state.archived_mode = True
             for key in state.selected:
                 state.selected[key] = None
-            equipment_open.set(False)
             touch_grid(); touch()
 
     def edit():
@@ -1495,7 +1495,6 @@ def server(input, output, session):
         state.archived_mode = True
         for key in state.selected:
             state.selected[key] = None
-        equipment_open.set(False)
         touch_grid(); touch()
 
     toolbar_server("toolbar", {"summary": summary, "move": move, "edit": edit, "back": back, "search": search, "add": add, "notes": notes}, session)

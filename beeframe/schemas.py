@@ -79,14 +79,14 @@ SCHEMAS: dict[str, dict[str, Field]] = {
     "measurements": entity(
         ("parent_frame_id", Field(TEXT, "Frame", True, editable=False)),
         ("scope", Field(TEXT, "Scope", True, "both", choices=("both", "left", "right"))),
-        ("comb_color", Field(TEXT, "Comb color", True, choices=("white", "brown", "black"))),
+        ("comb_color", Field(TEXT, "Comb color", True, "white", choices=("white", "brown", "black"))),
         *[(name, Field(INT, label, True, 0, minimum=0, maximum=100)) for name, label in (
             ("bees", "Bees"), ("empty_cells", "Empty cells"), ("drone_cells", "Drone cells"),
             ("capped_brood_cells", "Capped brood"), ("uncapped_brood_cells", "Uncapped brood"),
             ("capped_honey_cells", "Capped honey"), ("uncapped_honey_cells", "Uncapped honey"),
             ("pollen_cells", "Pollen"),
         )],
-        ("queen_cells", Field(INT, "Queen cells", True, 0, minimum=0)),
+        ("queen_cells", Field(INT, "Queen cells", True, 0, minimum=0, maximum=5)),
     ),
 }
 

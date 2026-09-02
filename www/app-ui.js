@@ -1,8 +1,32 @@
 (() => {
   const submissionLocks = new Map();
-  let reorderDrag = null;
   let pointerReorder = null;
+  let reorderHold = null;
+  let reorderHoldTimer = null;
+  let reorderHintTimer = null;
   let suppressEntityClickUntil = 0;
+  const HOLD_TO_REORDER_MS = 500;
+
+  function reorderPositionLabel(item) {
+    const position = Number(item.dataset.reorderPosition);
+    const direction = item.dataset.reorderLevel === "box" ? "bottom" : "left";
+    return position === 0 ? `0 · ${direction}-most` : `${position} from ${direction}`;
+  }
+
+  function showReorderHint(item, target = null) {
+    let hint = document.getElementById("reorder-position-hint");
+    if (!hint) {
+      hint = document.createElement("div");
+      hint.id = "reorder-position-hint";
+      hint.className = "reorder-position-hint";
+      hint.setAttribute("role", "status");
+      document.body.appendChild(hint);
+    }
+    hint.textContent = target ? `${reorderPositionLabel(item)} → ${reorderPositionLabel(target)}` : reorderPositionLabel(item);
+    hint.hidden = false;
+    window.clearTimeout(reorderHintTimer);
+    reorderHintTimer = window.setTimeout(() => { hint.hidden = true; }, 1800);
+  }
 
   function updateFullscreenButton() {
     document.querySelectorAll("[data-fullscreen-toggle]").forEach((button) => {
@@ -69,23 +93,18 @@
     input.dispatchEvent(new Event("change", { bubbles: true }));
   }
 
-  function updateMeasurementPreset(input) {
-    input.closest(".measurement-control")?.querySelectorAll("[data-measurement-value]").forEach((button) => {
-      button.classList.toggle("is-selected", Number(button.dataset.measurementValue) === Number(input.value));
-    });
-  }
+  document.addEventListener("input", (event) => {
+    const slider = event.target.closest(".measurement-slider");
+    if (!slider) return;
+    const input = document.getElementById(slider.dataset.measurementInput);
+    if (input) setMeasurementValue(input, slider.value);
+  });
 
-  document.addEventListener("click", (event) => {
-    const button = event.target.closest("[data-measurement-value], [data-measurement-delta], [data-measurement-clear]");
-    if (!button) return;
-    if (button.dataset.measurementClear === "true") {
-      button.closest(".measurement-form")?.querySelectorAll(".measurement-control input[type=number]").forEach((input) => setMeasurementValue(input, 0));
-      return;
-    }
-    const input = document.getElementById(button.dataset.measurementInput);
+  document.addEventListener("input", (event) => {
+    const input = event.target.closest(".measurement-control input[type=number]");
     if (!input) return;
-    const value = button.dataset.measurementValue ?? Number(input.value) + Number(button.dataset.measurementDelta);
-    setMeasurementValue(input, value);
+    const slider = document.getElementById(`${input.id}_slider`);
+    if (slider) slider.value = input.value;
   });
 
   document.addEventListener("click", (event) => {
@@ -115,46 +134,34 @@
     box.querySelectorAll(`.stacked-frame-track .segment-${toggle.dataset.chartSeries}`).forEach((segment) => { segment.hidden = !active; });
   });
 
-  document.addEventListener("dragstart", (event) => {
-    const item = event.target.closest("[data-reorder-level]");
-    if (!item) return;
-    reorderDrag = { id: item.dataset.id, level: item.dataset.reorderLevel, parent: item.dataset.reorderParent };
-    item.classList.add("is-dragging");
-    event.dataTransfer.effectAllowed = "move";
-  });
-  document.addEventListener("dragover", (event) => {
-    const target = event.target.closest("[data-reorder-level]");
-    if (!target || !reorderDrag || target.dataset.reorderLevel !== reorderDrag.level || target.dataset.reorderParent !== reorderDrag.parent) return;
-    event.preventDefault();
-    event.dataTransfer.dropEffect = "move";
-  });
-  document.addEventListener("drop", (event) => {
-    const target = event.target.closest("[data-reorder-level]");
-    if (!target || !reorderDrag || target.dataset.id === reorderDrag.id || target.dataset.reorderLevel !== reorderDrag.level || target.dataset.reorderParent !== reorderDrag.parent || !window.Shiny) return;
-    event.preventDefault();
-    Shiny.setInputValue("reorder_request", JSON.stringify({ ...reorderDrag, target: target.dataset.id }), { priority: "event" });
-  });
-  document.addEventListener("dragend", () => {
-    document.querySelectorAll(".is-dragging").forEach((item) => item.classList.remove("is-dragging"));
-    reorderDrag = null;
-  });
-
   function clearPointerReorder() {
+    window.clearTimeout(reorderHoldTimer);
+    reorderHoldTimer = null;
+    reorderHold = null;
     document.querySelectorAll(".is-dragging, .is-drop-target").forEach((item) => item.classList.remove("is-dragging", "is-drop-target"));
     pointerReorder = null;
   }
 
   document.addEventListener("pointerdown", (event) => {
-    const handle = event.target.closest("[data-reorder-handle]");
-    const item = handle?.closest("[data-reorder-level]");
-    if (!item) return;
-    event.preventDefault();
-    handle.setPointerCapture?.(event.pointerId);
-    pointerReorder = { id: item.dataset.id, level: item.dataset.reorderLevel, parent: item.dataset.reorderParent, startX: event.clientX, startY: event.clientY, target: null };
-    item.classList.add("is-dragging");
+    const item = event.target.closest("[data-reorder-level]");
+    if (!item || event.button !== 0) return;
+    reorderHold = { item, id: item.dataset.id, level: item.dataset.reorderLevel, parent: item.dataset.reorderParent, startX: event.clientX, startY: event.clientY };
+    reorderHoldTimer = window.setTimeout(() => {
+      if (!reorderHold) return;
+      pointerReorder = { ...reorderHold, target: null };
+      pointerReorder.item.setPointerCapture?.(event.pointerId);
+      pointerReorder.item.classList.add("is-dragging");
+      showReorderHint(pointerReorder.item);
+      reorderHold = null;
+      reorderHoldTimer = null;
+    }, HOLD_TO_REORDER_MS);
   });
 
   document.addEventListener("pointermove", (event) => {
+    if (reorderHold && Math.hypot(event.clientX - reorderHold.startX, event.clientY - reorderHold.startY) > 8) {
+      clearPointerReorder();
+      return;
+    }
     if (!pointerReorder || Math.hypot(event.clientX - pointerReorder.startX, event.clientY - pointerReorder.startY) < 5) return;
     const target = document.elementFromPoint(event.clientX, event.clientY)?.closest("[data-reorder-level]");
     document.querySelectorAll(".is-drop-target").forEach((item) => item.classList.remove("is-drop-target"));
@@ -164,10 +171,14 @@
     }
     pointerReorder.target = target;
     target.classList.add("is-drop-target");
+    showReorderHint(pointerReorder.item, target);
   });
 
   document.addEventListener("pointerup", (event) => {
-    if (!pointerReorder) return;
+    if (!pointerReorder) {
+      clearPointerReorder();
+      return;
+    }
     const { id, level, parent, target } = pointerReorder;
     suppressEntityClickUntil = Date.now() + 500;
     if (target && window.Shiny) Shiny.setInputValue("reorder_request", JSON.stringify({ id, level, parent, target: target.dataset.id }), { priority: "event" });
@@ -188,7 +199,7 @@
   document.addEventListener("click", (event) => {
     const button = event.target.closest("[data-level][data-id]");
     if (!button || !window.Shiny) return;
-    if (event.target.closest("[data-reorder-handle]") || (Date.now() < suppressEntityClickUntil && button.matches("[data-reorder-level]"))) {
+    if (Date.now() < suppressEntityClickUntil && button.matches("[data-reorder-level]")) {
       event.preventDefault();
       event.stopImmediatePropagation();
       return;
@@ -257,7 +268,6 @@
   }
 
   document.addEventListener("input", (event) => {
-    if (event.target.matches(".measurement-control input[type=number]")) updateMeasurementPreset(event.target);
     if (event.target.id === "entity-search-filter") filterEntities(event.target);
     if (event.target.id === "move-search-filter") filterMove(event.target);
     if (event.target.id === "notes-table-filter") filterNotes(event.target);
