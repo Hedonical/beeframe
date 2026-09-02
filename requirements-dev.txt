@@ -1,0 +1,4 @@
+shiny>=1.4,<2
+shinylive>=0.8,<1
+-r requirements.txt
+pytest>=8,<10

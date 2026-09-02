@@ -1,1 +1,3 @@
-azure-storage-blob
+# Match the WebAssembly build bundled with Shinylive/Pyodide.
+polars==1.18.0
+tzdata==2024.1
